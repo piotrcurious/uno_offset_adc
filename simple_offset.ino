@@ -118,9 +118,8 @@ void calibrate() {
   float correctionFactor = vActual / vMeasured; // calculate the correction factor using the formula above
   Serial.print("Correction factor: ");
   Serial.println(correctionFactor); // print the correction factor to serial monitor
-  // Store the offset, divider and correction values in EEPROM for future use
-  EEPROM.write(0, pwmMaxValue); // store the offset value in address 0
-  EEPROM.write(1, r2 / r1); // store the divider value in address 1
-  EEPROM.write(2, correctionFactor); // store the correction value in address 2
+  // Store the divider and correction values in EEPROM for future use
+  EEPROM.put(0, correctionFactor); // store the correction value in address 0 to 3
+  EEPROM.put(6, r2/r1); // store the divider value in address 4 to 7
   Serial.println("Calibration done. Values stored in EEPROM.");
 }
