@@ -94,6 +94,8 @@ long readCombined () {
 void calibrate () {
   // Set the calibration pin as output
   pinMode (CAL_pin, OUTPUT);
+  // Calculate the expected time constant of the RC circuit
+  float tau = Rcal * Ccal;
 
   // Set the LED pin as output and turn it on
   pinMode (LED_pin, OUTPUT);
@@ -102,21 +104,19 @@ void calibrate () {
   // Charge the capacitor by setting the calibration pin high
   digitalWrite (CAL_pin, HIGH);
 
+  //charge the cap for expected time constant
+  delay (tau *1000);
   // Wait for the capacitor to charge fully
   delay (1000);
 
+  // Measure the initial voltage across the capacitor
+  long V0 = readCombined ();
   // Discharge the capacitor by setting the calibration pin low
   digitalWrite (CAL_pin, LOW);
 
-  // Measure the initial voltage across the capacitor
-  long V0 = readCombined ();
-
-  // Calculate the expected time constant of the RC circuit
-  float tau = Rcal * Ccal;
-
   // Wait for one time constant
   delay (tau *1000);
-
+  pinMode (CAL_pin, INPUT);
   // Measure the final voltage across the capacitor
   long V1 = readCombined ();
 
