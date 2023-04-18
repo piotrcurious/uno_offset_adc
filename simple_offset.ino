@@ -15,7 +15,7 @@ float scale = 0; // scaling factor for PWM
 int divider = 1; // voltage divider ratio for A0 pin
 float correction = 1.0; // correction factor for measurement
 const float vcc = 5.0; // max vcc for op-amp
-
+const float vref = 1.1 ; // vref value for ADC
 
 
 // Initialize the PWM and ADC settings
@@ -25,7 +25,7 @@ void setup() {
   pinMode(capPin, OUTPUT); // set capacitor pin as output
   analogReference(adcRef); // set ADC reference voltage
   scale = vcc / pwmMax; // calculate the scaling factor using the formula above
-
+  float ADC_scale = vref/adcMax ; // calculate the scaling for ADC
 }
 
 // Main loop
@@ -37,9 +37,9 @@ void loop() {
 
 // Function to measure the voltage using op-amp and PWM
 float measureVoltage() {
-  int adcUpper = binarySearch(); // find the upper 16 bits of measurement by binary search
-  int adcLower = analogRead(opAmpPin); // find the lower 10 bits of measurement by ADC readout
-  float voltage = (adcUpper * scale + adcLower) * correction; // combine the results and apply correction factor
+  int adcUpper = binarySearch() * scale; // find the upper 16 bits of measurement by binary search
+  int adcLower = analogRead(opAmpPin) * ADC_scale; // find the lower 10 bits of measurement by ADC readout
+  float voltage = (adcUpper + adcLower) * correction; // combine the results and apply correction factor
 //  float voltage = (adcUpper + adcLower) * correction; // combine the results and apply correction factor
   return voltage; // return the voltage value
 }
