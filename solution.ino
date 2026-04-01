@@ -1,4 +1,14 @@
 
+/*
+ * High-Resolution Voltage Measurement for Arduino Uno
+ * Uses 16-bit PWM (Timer1) to offset the input voltage and a 10-bit ADC
+ * to measure the residual, effectively extending resolution.
+ *
+ * Circuit Architecture:
+ * - Input Voltage -> Voltage Divider -> Op-Amp Non-Inverting Input (+)
+ * - Pin 9 (16-bit PWM) -> RC Filter -> Op-Amp Inverting Input (-)
+ * - Op-Amp Output -> Current Limiting Resistor -> Pin A0 (ADC)
+ */
 #include <Arduino.h>
 #include <EEPROM.h>
 
@@ -27,6 +37,18 @@ void writePWM16(uint16_t val) {
   OCR1A = val;
 }
 
+// Helper to read ADC with averaging
+int analogReadAveraged(int pin, int samples = 16) {
+  long sum = 0;
+  for (int i = 0; i < samples; i++) {
+    sum += analogRead(pin);
+  }
+  return sum / samples;
+}
+
+// Forward declaration
+float readVcc();
+
 // Measurement function
 float measureVoltage() {
   int32_t pwmValue = 32768;
@@ -35,15 +57,12 @@ float measureVoltage() {
 
   for (int i = 0; i < 16; i++) {
     writePWM16((uint16_t)constrain(pwmValue, 0, 65535));
-    delay(15); // Allow RC filter to settle (1uF * internal resistance)
-    adcValue = analogRead(opampPin);
+    delay(20); // Allow RC filter to settle
+    adcValue = analogReadAveraged(opampPin, 8); // Fast averaging during search
 
-    // Target ADC middle point (~0.55V)
     if (adcValue > 512 + window) {
-      // Vout too high -> Vmeas_divided - Vpwm > 0.55 -> Increase Vpwm
       pwmValue += step;
     } else if (adcValue < 512 - window) {
-      // Vout too low -> Vmeas_divided - Vpwm < 0.55 -> Decrease Vpwm
       pwmValue -= step;
     } else {
       break;
@@ -52,27 +71,26 @@ float measureVoltage() {
   }
   pwmValue = constrain(pwmValue, 0, 65535);
   writePWM16((uint16_t)pwmValue);
-  delay(15);
+  delay(30); // Extra time for final settlement
 
-  // Final measurement
-  adcValue = analogRead(opampPin);
+  // Final high-precision measurement
+  adcValue = analogReadAveraged(opampPin, 64);
 
-  // Vpwm (0V to Vcc)
   float vpwm = ((float)pwmValue / 65535.0) * vcc;
-  // Vout_opamp (0V to 1.1V ref)
   float vout_opamp = ((float)adcValue / 1023.0) * 1.1;
 
-  // Vmeas_divided = Vpwm + Vout_opamp
-  float vmeas_divided = vpwm + vout_opamp;
-
-  return vmeas_divided;
+  return vpwm + vout_opamp;
 }
 
 void calibrateVoltage() {
+  // Clear any existing characters (like the 'c' that triggered this)
+  while (Serial.available() > 0) Serial.read();
+
   Serial.println(F("Calibration started"));
   Serial.println(F("Connect 100uF cap to meas input, 1k ohm to pin 10."));
   Serial.println(F("Press any key to start..."));
-  // while (Serial.available() == 0) { delay(1); }
+
+  while (Serial.available() == 0) { delay(10); }
   while (Serial.available() > 0) Serial.read();
 
   // Charge capacitor
@@ -83,27 +101,35 @@ void calibrateVoltage() {
 
   // Use PWM=0 to measure input directly through op-amp when it's within 1.1V range
   writePWM16(0);
-  delay(100);
-  int initial_adc = analogRead(opampPin);
+  delay(500);
+  int initial_adc = analogReadAveraged(opampPin, 64);
   Serial.print(F("Initial ADC at 5V: ")); Serial.println(initial_adc);
 
-  digitalWrite(calPin, LOW); // Start discharge
-  unsigned long start_micros = micros();
+  if (initial_adc < 100) {
+      Serial.println(F("Error: Capacitor not charging. Check connections."));
+      return;
+  }
 
-  // Wait for ADC to drop to 70% of initial
-  int target1 = (int)(initial_adc * 0.7);
-  while (analogRead(opampPin) > target1) { delay(1); }
+  digitalWrite(calPin, LOW); // Start discharge
+
+  // Wait for ADC to drop to 80% of initial
+  int target1 = (int)(initial_adc * 0.8);
+  while (analogRead(opampPin) > target1) { ; }
   unsigned long t1 = micros();
 
-  // Wait for ADC to drop to 35% of initial (which is half of 70%)
-  int target2 = (int)(initial_adc * 0.35);
-  while (analogRead(opampPin) > target2) { delay(1); }
+  // Wait for ADC to drop to 40% of initial (which is half of 80%)
+  int target2 = (int)(initial_adc * 0.4);
+  while (analogRead(opampPin) > target2) { ; }
   unsigned long t2 = micros();
 
   float dt = (float)(t2 - t1) / 1000000.0;
-  // RC = dt / ln(0.7 / 0.35) = dt / ln(2)
+  // RC = dt / ln(0.8 / 0.4) = dt / ln(2)
   float rc_actual = dt / 0.693147;
   Serial.print(F("Measured RC: ")); Serial.println(rc_actual);
+
+  // Use measured RC to refine voltage measurements if R and C are known accurately.
+  // Conceptually, V_ref(t) = Vcc * exp(-t/rc_actual).
+  // This allows us to use the capacitor as a stable (though decaying) reference.
 
   // Now use the RC to find Vcc.
   // We measured ADC at t1. V(t1) = Vcc * vdiv * exp(-t1_since_discharge/RC)
@@ -119,8 +145,8 @@ void calibrateVoltage() {
   // Actually, the prompt means use the discharge curve as a reference.
   // V_ref(t) = Vcc * exp(-t/0.1)
 
-  // Let's use Vcc = 5.0V as a base assumption but allow calibration of vdiv.
-  vcc = 5.0;
+  // Measure Vcc using bandgap and use it to calibrate divider.
+  vcc = readVcc();
   float vmeas_divided_Vcc = measureVoltage();
   vdiv = vmeas_divided_Vcc / vcc;
 

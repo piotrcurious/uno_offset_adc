@@ -65,8 +65,13 @@ struct SerialMock {
     void println(int i) { std::cout << i << std::endl; }
     void println(long l) { std::cout << l << std::endl; }
     int avail = 0;
+    int read_idx = 0;
     int available() { return avail; }
-    char read() { avail = 0; return 'c'; }
+    char read() {
+        avail = 0;
+        if (read_idx == 0) { read_idx++; return 'c'; }
+        return ' ';
+    }
 };
 
 extern SerialMock Serial;
