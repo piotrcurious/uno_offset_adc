@@ -1,6 +1,12 @@
 
+/*
+ * Arduino Hardware Physics Simulator
+ * Simulates a differential op-amp circuit with input voltage divider,
+ * 16-bit PWM RC filter, and capacitor discharge for calibration.
+ */
 #include "Arduino.h"
 #include <chrono>
+#include <random>
 
 uint8_t DDRB = 0;
 uint8_t PORTB = 0;
@@ -14,9 +20,13 @@ EEPROMMock EEPROM;
 
 float measurement_voltage = 0.0;
 float filtered_pwm_voltage = 0.0;
+float pwm_target_voltage = 0.0;
 bool pin10_high = false;
 bool pin10_output = false;
 float simulator_vdiv = 0.1; // Divider on the input: Vplus = Vmeas * vdiv
+
+std::default_random_engine generator;
+std::normal_distribution<float> noise_dist(0.0, 0.001); // 1mV RMS noise
 
 unsigned long simulated_micros = 0;
 void set_input_voltage(float voltage) {
@@ -42,14 +52,28 @@ int digitalRead(int pin) {
 
 int analogRead(int pin) {
     if (pin == A0) {
+        // Corrected Circuit:
         // Vplus = measurement_voltage * simulator_vdiv
-        // Vminus = filtered_pwm_voltage
+        // Vminus = filtered_pwm_voltage (16-bit PWM, RC filtered)
         // Vout = Vplus - Vminus
+        // A0 = Vout
         float v_plus = measurement_voltage * simulator_vdiv;
         float v_out = v_plus - filtered_pwm_voltage;
 
+        // Add noise
+        v_out += noise_dist(generator);
+
         // ADC 10-bit, 1.1V reference
         int adc = (int)(v_out * 1023.0 / 1.1);
+
+        // Physical update during polling
+        simulated_micros += 100; // 100us per analogRead
+        // Small settling during poll
+        float rc_pwm = 0.040;
+        filtered_pwm_voltage = pwm_target_voltage + (filtered_pwm_voltage - pwm_target_voltage) * exp(-0.1 / rc_pwm);
+        if (pin10_output && !pin10_high) {
+            measurement_voltage *= exp(-0.1 / 100.0);
+        }
 
         if (adc > 1023) adc = 1023;
         if (adc < 0) adc = 0;
@@ -59,9 +83,24 @@ int analogRead(int pin) {
 }
 
 void delay(unsigned long ms) {
+    if (ms == 10) { // Special case for calibration wait
+        Serial.avail = 1;
+    }
     simulated_micros += ms * 1000;
-    float pwm_target = (float)OCR1A / (float)ICR1 * 5.0; // Assume 5V VCC for PWM
-    filtered_pwm_voltage = pwm_target; // Instant settling
+    pwm_target_voltage = (float)OCR1A / (float)ICR1 * 5.0; // Assume 5V VCC for PWM
+
+    // PWM RC Filter simulation:
+    // RC = internal resistance * 1uF.
+    // Assume internal resistance = 40 ohms -> RC = 40us.
+    // Settling time is about 5*RC = 200us.
+    // Since delay is in ms, it usually settles instantly unless ms=0 or very small.
+    // Let's use a smaller time step for settling if needed.
+    float rc_pwm = 0.040; // 40us in ms
+    if (ms > 0) {
+        // For ms > 0, we can assume it reaches target or use formula:
+        // V = Vtarget + (Vstart - Vtarget) * exp(-t/RC)
+        filtered_pwm_voltage = pwm_target_voltage + (filtered_pwm_voltage - pwm_target_voltage) * exp(-(float)ms / rc_pwm);
+    }
 
     // Capacitor simulation for pin 10 calibration
     if (pin10_output) {
@@ -95,12 +134,28 @@ void analogReference(int mode) {}
 extern void setup();
 extern void loop();
 
+/**
+ * Main simulation loop
+ * 1. Runs the Arduino setup()
+ * 2. Triggers the calibration routine
+ * 3. Sweeps through input voltages and compares simulator truth with Arduino measurement.
+ */
 int main() {
     setup();
     // Calibration first
     std::cout << "--- STARTING CALIBRATION ---" << std::endl;
-    Serial.avail = 1; // Trigger calibration in loop()
-    loop(); // This will call calibrateVoltage()
+
+    // Use a separate thread or just manually advance state
+    // In our simplified mock, we can just call it and make sure Serial.avail is set when needed.
+
+    Serial.avail = 1; // Trigger 'c' in loop()
+    // This will enter calibrateVoltage(). Inside, it will call analogRead which increments time.
+    // We need to make sure Serial.avail is reset and then set again for the "Press any key"
+
+    // We can't easily do async input in this simple main.
+    // Let's modify SerialMock to return 'c' then something else.
+
+    loop();
 
     std::cout << "--- STARTING MEASUREMENTS ---" << std::endl;
 
